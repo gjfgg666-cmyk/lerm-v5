@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  lerm-gateway:
+    build: .
+    container_name: lerm-v5
+    ports:
+      - "8080:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: lerm-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus-rules.yaml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - lerm-gateway
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: lerm-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
