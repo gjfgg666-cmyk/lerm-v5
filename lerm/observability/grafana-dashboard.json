@@ -1,0 +1,27 @@
+{
+  "dashboard": {
+    "title": "LERM v5 - AI Inference Gateway",
+    "panels": [
+      {
+        "title": "Request Rate",
+        "type": "graph",
+        "targets": [{"expr": "rate(lerm_requests_total[5m])"}]
+      },
+      {
+        "title": "Latency P99",
+        "type": "graph",
+        "targets": [{"expr": "histogram_quantile(0.99, rate(lerm_request_duration_seconds_bucket[5m]))"}]
+      },
+      {
+        "title": "Error Rate",
+        "type": "graph",
+        "targets": [{"expr": "rate(lerm_errors_total[5m])"}]
+      },
+      {
+        "title": "Circuit Breaker State",
+        "type": "stat",
+        "targets": [{"expr": "lerm_circuit_breaker_state"}]
+      }
+    ]
+  }
+}
