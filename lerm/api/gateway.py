@@ -4,7 +4,10 @@ OpenAI-compatible chat completions with full observability instrumentation.
 """
 
 import time
-from fastapi import APIRouter, Request
+from fastapi import Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from auth import check_model
 from core.kernel import kernel
 from core.metrics_collector import (
     REQUESTS_TOTAL,
@@ -14,6 +17,10 @@ from core.metrics_collector import (
 )
 from core.circuit_breaker import circuit_manager
 
+# Re-export router so main.py can import it
+from fastapi import APIRouter
+
+chat_limiter = Limiter(key_func=get_remote_address)
 router = APIRouter()
 
 
@@ -34,17 +41,19 @@ def resolve_model_name(model: str) -> str:
     if not model or model == "auto":
         return "auto"
     if model.startswith("ollama"):
-        # Use the model name as-is, or default to qwen3:1.7b
         parts = model.split(":", 1)
         return parts[1] if len(parts) > 1 else "qwen3:1.7b"
     return model
 
 
 @router.post("/v1/chat/completions")
+@chat_limiter.limit("60/minute")
 async def chat(request: Request):
     body = await request.json()
     model = body.get("model", "ollama")
-    messages = body.get("messages", [])
+
+    # P0: Model name whitelist check
+    check_model(model)
 
     # Resolve model name for metrics and circuit breaker
     metrics_model = resolve_model_name(model)
@@ -54,8 +63,10 @@ async def chat(request: Request):
     if not breaker.can_execute():
         REQUESTS_TOTAL.labels(model=metrics_model, status="rejected").inc()
         return {
-            "error": "circuit_open",
-            "detail": f"Model '{metrics_model}' circuit breaker is OPEN. Requests are rejected.",
+            "error": {
+                "type": "circuit_open",
+                "message": f"Model '{metrics_model}' circuit breaker is OPEN.",
+            },
             "X-LERM-Error-Type": "crash",
         }
 
@@ -64,14 +75,14 @@ async def chat(request: Request):
     start_time = time.monotonic()
 
     try:
-        resp = await kernel.route(model, messages)
-        breaker.record_success()
+        resp = await kernel.route(model, body.get("messages", []))
 
+        breaker.record_success()
         duration = time.monotonic() - start_time
+
         REQUESTS_TOTAL.labels(model=metrics_model, status="success").inc()
         REQUEST_DURATION_SECONDS.labels(model=metrics_model).observe(duration)
 
-        # Inject LERM metadata into response
         if isinstance(resp, dict):
             resp["X-LERM-Model"] = metrics_model
             resp["X-LERM-Duration-Ms"] = round(duration * 1000, 2)
@@ -87,8 +98,12 @@ async def chat(request: Request):
         ERRORS_TOTAL.labels(model=metrics_model, error_type=error_type).inc()
         REQUEST_DURATION_SECONDS.labels(model=metrics_model).observe(duration)
 
+        # P1: Unified error response — never expose internal exception strings
         return {
-            "error": str(exc),
+            "error": {
+                "type": error_type,
+                "message": "Request failed. Check X-LERM-Error-Type for category.",
+            },
             "X-LERM-Error-Type": error_type,
             "X-LERM-Model": metrics_model,
             "X-LERM-Duration-Ms": round(duration * 1000, 2),

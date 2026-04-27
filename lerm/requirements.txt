@@ -1,5 +1,7 @@
 fastapi>=0.104.0
 uvicorn>=0.24.0
-requests>=2.31.0
+httpx>=0.25.0
 prometheus-client>=0.17.1
 pyyaml>=6.0.1
+slowapi>=0.1.9
+python-dotenv>=1.0.0
